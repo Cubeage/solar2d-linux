@@ -1,190 +1,273 @@
 name: Build Solar2DBuilder for Linux
 
+# Auto-builds a new release whenever Solar2D publishes a new version.
+# Also supports manual dispatch with optional version override.
 on:
+  schedule:
+    - cron: '0 6 * * *'   # Daily at 06:00 UTC — check for new Solar2D releases
   workflow_dispatch:
     inputs:
       solar2d_build:
-        description: 'Solar2D build number (e.g. 3728)'
-        required: true
-        default: '3728'
+        description: 'Solar2D build number (blank = latest)'
+        required: false
+        default: ''
       solar2d_year:
-        description: 'Solar2D year (e.g. 2026)'
-        required: true
-        default: '2026'
-
-env:
-  BUILD: ${{ github.event.inputs.solar2d_build }}
-  YEAR: ${{ github.event.inputs.solar2d_year }}
+        description: 'Solar2D year (blank = auto-detect)'
+        required: false
+        default: ''
+      force:
+        description: 'Force rebuild even if already released'
+        type: boolean
+        default: false
 
 jobs:
-  build-and-publish:
-    name: Build Solar2DBuilder + Extract Android Templates
-    runs-on: ubuntu-22.04
+  # ── Check if a new Solar2D release is available ─────────────────────
+  check:
+    name: Check for new Solar2D release
+    runs-on: ubuntu-latest
+    outputs:
+      build:       ${{ steps.detect.outputs.build }}
+      year:        ${{ steps.detect.outputs.year }}
+      tag:         ${{ steps.detect.outputs.tag }}
+      should_build: ${{ steps.detect.outputs.should_build }}
     steps:
-      # ── 1. Install dependencies ────────────────────────────────────
+      - name: Detect version and compare
+        id: detect
+        run: |
+          # Resolve target Solar2D version
+          INPUT_BUILD="${{ github.event.inputs.solar2d_build }}"
+          if [ -n "$INPUT_BUILD" ]; then
+            BUILD="$INPUT_BUILD"
+            INPUT_YEAR="${{ github.event.inputs.solar2d_year }}"
+            if [ -n "$INPUT_YEAR" ]; then
+              YEAR="$INPUT_YEAR"
+            else
+              # Auto-detect year from the release name
+              YEAR=$(curl -fsSL "https://api.github.com/repos/coronalabs/corona/releases/tags/${BUILD}" \
+                | jq -r '.name' | grep -oP '^\d{4}' || echo "$(date +%Y)")
+            fi
+          else
+            # Get latest Solar2D release
+            RELEASE=$(curl -fsSL "https://api.github.com/repos/coronalabs/corona/releases/latest")
+            BUILD=$(echo "$RELEASE" | jq -r '.tag_name')
+            YEAR=$(echo "$RELEASE" | jq -r '.name' | grep -oP '^\d{4}' || echo "$(date +%Y)")
+          fi
+
+          TAG="${YEAR}.${BUILD}"
+          echo "Target: Solar2D ${TAG}"
+
+          # Check if we already have this version
+          OUR_LATEST=$(curl -fsSL "https://api.github.com/repos/${{ github.repository }}/releases/latest" \
+            | jq -r '.tag_name // "none"' 2>/dev/null || echo "none")
+          echo "Our latest: ${OUR_LATEST}"
+
+          FORCE="${{ github.event.inputs.force }}"
+          if [ "$OUR_LATEST" = "$TAG" ] && [ "$FORCE" != "true" ]; then
+            echo "Already up to date (${TAG}). Skipping build."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "New version available: ${TAG}"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "build=${BUILD}"  >> "$GITHUB_OUTPUT"
+          echo "year=${YEAR}"    >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}"      >> "$GITHUB_OUTPUT"
+
+  # ── Build and publish ────────────────────────────────────────────────
+  build:
+    name: Build Solar2DBuilder ${{ needs.check.outputs.tag }}
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
+    runs-on: ubuntu-22.04    # Pin to 22.04 for glibc 2.35 compatibility
+    env:
+      BUILD: ${{ needs.check.outputs.build }}
+      YEAR:  ${{ needs.check.outputs.year }}
+      TAG:   ${{ needs.check.outputs.tag }}
+    steps:
+      # ── Install build dependencies ─────────────────────────────────
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
             cmake ninja-build git \
             openjdk-17-jdk-headless \
-            libcurl4-openssl-dev \
-            libfreetype6-dev \
-            libgl1-mesa-dev \
-            libglu1-mesa-dev \
-            libopenal-dev \
-            libpng-dev \
-            libjpeg-dev \
-            libssl-dev \
-            libvorbis-dev \
-            libogg-dev \
-            uuid-dev \
-            zlib1g-dev \
-            libsdl2-dev \
-            p7zip-full \
-            libtinfo5 2>/dev/null || \
-          sudo apt-get install -y \
-            cmake ninja-build git \
-            openjdk-17-jdk-headless \
-            libcurl4-openssl-dev \
-            libfreetype6-dev \
-            libgl1-mesa-dev \
-            libglu1-mesa-dev \
-            libopenal-dev \
-            libpng-dev \
-            libjpeg-dev \
-            libssl-dev \
-            libvorbis-dev \
-            libogg-dev \
-            uuid-dev \
-            zlib1g-dev \
-            libsdl2-dev \
-            p7zip-full
+            libcurl4-openssl-dev libfreetype6-dev \
+            libgl1-mesa-dev libglu1-mesa-dev libgl1-mesa-dri libglx-mesa0 \
+            libopenal-dev libpng-dev libjpeg-dev libssl-dev \
+            libvorbis-dev libogg-dev uuid-dev zlib1g-dev \
+            libsdl2-dev p7zip-full xvfb
 
-      # ── 2. Extract Android templates from official macOS DMG ───────
-      - name: Download Solar2D macOS DMG and extract Android templates
-        run: |
-          echo "Downloading Solar2D-macOS-${YEAR}.${BUILD}.dmg..."
-          curl -L \
-            "https://github.com/coronalabs/corona/releases/download/${BUILD}/Solar2D-macOS-${YEAR}.${BUILD}.dmg" \
-            -o /tmp/Solar2D.dmg --show-error
+      # ── Checkout this repo (for patches) ───────────────────────────
+      - name: Checkout solar2d-linux (patches)
+        uses: actions/checkout@v4
+        with:
+          path: solar2d-linux
 
-          echo "Extracting DMG with 7z..."
-          mkdir -p /tmp/dmg-extract
-          cd /tmp/dmg-extract
-
-          # 7z extracts UDIF DMG: outer container → inner HFS+ image
-          7z x /tmp/Solar2D.dmg -o./outer 2>&1 | tail -5
-
-          echo "Outer contents:"
-          ls -la outer/ 2>/dev/null || true
-
-          # Find the HFS+ partition file (usually .hfsx or 3.hfs or similar)
-          HFS=$(find outer -name "*.hfsx" -o -name "*.hfs" -o -name "3" -o -name "2" 2>/dev/null | head -1)
-          if [ -z "$HFS" ]; then
-            # Try extracting any non-text files as HFS partitions
-            HFS=$(find outer -type f -size +100M 2>/dev/null | head -1)
-          fi
-          echo "HFS partition: $HFS"
-
-          if [ -n "$HFS" ]; then
-            7z x "$HFS" -o./inner 2>&1 | tail -5
-            echo "Inner contents (top):"
-            ls -la inner/ 2>/dev/null | head -20
-          else
-            echo "Direct extraction, trying inner contents..."
-            ls -la outer/ 2>/dev/null
-            # Maybe 7z extracted files directly
-            mv outer inner
-          fi
-
-          # Locate Android templates
-          echo "Searching for android-template.zip and Corona.aar..."
-          find . -name "android-template.zip" -o -name "Corona.aar" 2>/dev/null
-
-          AAR=$(find . -name "Corona.aar" 2>/dev/null | head -1)
-          TEMPLATE=$(find . -name "android-template.zip" 2>/dev/null | head -1)
-
-          if [ -z "$AAR" ] || [ -z "$TEMPLATE" ]; then
-            echo "ERROR: Could not find Android templates in DMG"
-            exit 1
-          fi
-
-          mkdir -p /tmp/android-templates
-          cp "$AAR" /tmp/android-templates/Corona.aar
-          cp "$TEMPLATE" /tmp/android-templates/android-template.zip
-          echo "Extracted Android templates:"
-          ls -lh /tmp/android-templates/
-
-          # Cleanup DMG to free disk space
-          rm -rf /tmp/Solar2D.dmg /tmp/dmg-extract
-
-      # ── 3. Clone Solar2D source ─────────────────────────────────────
-      - name: Clone Solar2D source at tag ${{ env.BUILD }}
+      # ── Clone Solar2D source at tag ─────────────────────────────────
+      - name: Clone coronalabs/corona @ ${{ env.BUILD }}
         run: |
           git clone --recursive --depth 1 --branch "$BUILD" \
             https://github.com/coronalabs/corona.git solar2d-src
-          echo "Cloned at tag $BUILD"
+          echo "Cloned Solar2D ${BUILD} ($(git -C solar2d-src rev-parse --short HEAD))"
 
-      # ── 4. CMake build of Solar2DBuilder ────────────────────────────
+      # ── Apply patches ───────────────────────────────────────────────
+      - name: Apply Linux Android patches
+        run: |
+          cd solar2d-src
+          for PATCH in ../solar2d-linux/patches/*.patch; do
+            echo "Applying: $(basename "$PATCH")"
+            git apply "$PATCH"
+          done
+          echo "All patches applied successfully"
+
+      # ── Build Solar2DBuilder ────────────────────────────────────────
       - name: Build Solar2DBuilder
         run: |
           cd solar2d-src/platform/linux
           mkdir -p build && cd build
-          cmake .. \
+          cmake ../.. \
             -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release
-          # Build only Solar2DBuilder target
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_NUMBER="${BUILD}" \
+            -DYEAR="${YEAR}"
           ninja Solar2DBuilder
-          ls -lh Solar2DBuilder
+          echo "Binary: $(du -sh Solar2DBuilder)"
 
-      # ── 5. Assemble package ─────────────────────────────────────────
-      - name: Assemble release package
+      # ── Get Corona.aar from CoronaCards-Android release ─────────────
+      - name: Download Corona.aar
         run: |
-          PKG_DIR="/tmp/solar2d-linux-${BUILD}"
-          mkdir -p "${PKG_DIR}/Resources"
+          URL="https://github.com/coronalabs/corona/releases/download/${BUILD}/CoronaCards-Android-${TAG}.zip"
+          echo "Downloading: $URL"
+          curl -fsSL "$URL" -o CoronaCards-Android.zip
+          mkdir -p android-templates
+          cd android-templates
+          unzip -q ../CoronaCards-Android.zip
+          unzip -q CoronaCardsAndroidAAR.zip
+          mv CoronaCards.aar Corona.aar
+          echo "Corona.aar: $(du -sh Corona.aar)"
 
-          # Binary
-          cp solar2d-src/platform/linux/build/Solar2DBuilder "${PKG_DIR}/"
-          chmod +x "${PKG_DIR}/Solar2DBuilder"
+      # ── Get android-template.zip from macOS DMG ─────────────────────
+      - name: Extract android-template.zip from macOS DMG
+        run: |
+          URL="https://github.com/coronalabs/corona/releases/download/${BUILD}/Solar2D-macOS-${TAG}.dmg"
+          echo "Downloading DMG (large): $URL"
+          curl -fsSL "$URL" -o Solar2D.dmg
 
-          # Android templates
-          cp /tmp/android-templates/android-template.zip "${PKG_DIR}/Resources/"
-          cp /tmp/android-templates/Corona.aar            "${PKG_DIR}/Resources/"
-
-          # Lua resources compiled into binary, but also copy platform resources
-          RESOURCES_SRC="solar2d-src/platform/resources"
-          if [ -d "$RESOURCES_SRC" ]; then
-            cp -r "${RESOURCES_SRC}/." "${PKG_DIR}/Resources/" 2>/dev/null || true
+          mkdir -p dmg-extract && cd dmg-extract
+          7z x ../Solar2D.dmg -o./outer 2>&1 | tail -5
+          HFS=$(find outer -type f -size +50M 2>/dev/null | head -1)
+          if [ -n "$HFS" ]; then
+            7z x "$HFS" -o./inner 2>&1 | tail -5
+          else
+            mv outer inner
           fi
 
-          echo "Package contents:"
-          find "${PKG_DIR}" -type f | sort
+          TEMPLATE=$(find . -name "android-template.zip" 2>/dev/null | head -1)
+          if [ -z "$TEMPLATE" ]; then
+            echo "ERROR: android-template.zip not found in DMG" && exit 1
+          fi
+          cp "$TEMPLATE" ../android-templates/android-template.zip
+          echo "android-template.zip: $(du -sh ../android-templates/android-template.zip)"
 
-          # Create tarball
-          cd /tmp
-          tar -czf "solar2dbuilder-linux-${BUILD}.tar.gz" "solar2d-linux-${BUILD}"
-          ls -lh "solar2dbuilder-linux-${BUILD}.tar.gz"
+          cd ..
+          rm -f Solar2D.dmg
+          rm -rf dmg-extract
 
-          echo "PKG_PATH=/tmp/solar2dbuilder-linux-${BUILD}.tar.gz" >> "$GITHUB_ENV"
+      # ── Assemble package ────────────────────────────────────────────
+      - name: Assemble release package
+        run: |
+          PKG="solar2d-linux-${BUILD}"
+          mkdir -p "${PKG}/lib" "${PKG}/Resources/Native/Corona/android/resource" \
+                                "${PKG}/Resources/Native/Corona/android/lib/gradle"
 
-      # ── 6. Publish GitHub Release ───────────────────────────────────
-      - name: Publish to GitHub Releases
+          # Binary
+          cp solar2d-src/platform/linux/build/Solar2DBuilder "${PKG}/"
+          chmod +x "${PKG}/Solar2DBuilder"
+
+          # Wrapper script (LD_LIBRARY_PATH + xvfb-run)
+          cat > "${PKG}/Solar2DBuilder.sh" << 'WRAPPER'
+          #!/usr/bin/env bash
+          DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+          export LD_LIBRARY_PATH="${DIR}/lib:${LD_LIBRARY_PATH:-}"
+          exec xvfb-run -a "${DIR}/Solar2DBuilder" "$@"
+          WRAPPER
+          chmod +x "${PKG}/Solar2DBuilder.sh"
+
+          # Bundle shared libraries
+          ldd "${PKG}/Solar2DBuilder" \
+            | awk '/=>/ && $3 ~ /^\// {print $3}' | sort -u \
+            | xargs -I{} cp -n {} "${PKG}/lib/" 2>/dev/null || true
+          echo "Bundled $(ls "${PKG}/lib/" | wc -l) shared libs"
+
+          # Resources: Lua scripts + configs from source
+          cp -r solar2d-src/platform/resources/. "${PKG}/Resources/"
+          cp solar2d-src/tools/CoronaBuilder/CoronaBuilder.lua           "${PKG}/Resources/" 2>/dev/null || true
+          cp solar2d-src/tools/CoronaBuilder/BuilderPluginDownloader.lua "${PKG}/Resources/" 2>/dev/null || true
+
+          # Resources: jar files from source
+          cp solar2d-src/platform/android/project/AntInvoke/AntInvoke.jar       "${PKG}/Resources/" 2>/dev/null || true
+          cp solar2d-src/platform/android/project/ListKeyStore/ListKeyStore.jar  "${PKG}/Resources/" 2>/dev/null || true
+          cp solar2d-src/platform/android/AntLiveManifest/AntLiveManifest.jar   "${PKG}/Resources/" 2>/dev/null || true
+          cp solar2d-src/platform/android/resources/_coronatest.jar              "${PKG}/Resources/" 2>/dev/null || true
+
+          # Resources: Android templates (top-level + Native subdir)
+          cp android-templates/Corona.aar           "${PKG}/Resources/"
+          cp android-templates/android-template.zip "${PKG}/Resources/"
+          cp android-templates/android-template.zip "${PKG}/Resources/Native/Corona/android/resource/"
+          cp android-templates/Corona.aar           "${PKG}/Resources/Native/Corona/android/lib/gradle/"
+
+          echo "Resources: $(find "${PKG}/Resources" -type f | wc -l) files"
+          echo "Package total: $(du -sh "${PKG}" | cut -f1)"
+
+          # Tarball
+          tar -czf "solar2dbuilder-linux-${BUILD}.tar.gz" "${PKG}"
+          echo "TARBALL=solar2dbuilder-linux-${BUILD}.tar.gz" >> "$GITHUB_ENV"
+          echo "Tarball: $(du -sh "solar2dbuilder-linux-${BUILD}.tar.gz" | cut -f1)"
+
+      # ── Smoke test ──────────────────────────────────────────────────
+      - name: Smoke test
+        run: |
+          PKG="solar2d-linux-${BUILD}"
+          export LD_LIBRARY_PATH="${PKG}/lib"
+          xvfb-run -a "${PKG}/Solar2DBuilder" --version 2>&1 || \
+          xvfb-run -a "${PKG}/Solar2DBuilder" --help 2>&1 | head -5 || \
+          echo "(exit code non-zero is OK for --help)"
+
+      # ── Publish GitHub Release ──────────────────────────────────────
+      - name: Publish release ${{ env.TAG }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.YEAR }}.${{ env.BUILD }}
-          name: Solar2DBuilder Linux ${{ env.YEAR }}.${{ env.BUILD }}
+          tag_name: ${{ env.TAG }}
+          name: Solar2DBuilder Linux ${{ env.TAG }}
           body: |
             Linux build of `Solar2DBuilder` for CI/CD Android APK builds.
 
-            Built from Solar2D ${{ env.YEAR }}.${{ env.BUILD }} open source.
-            Android templates extracted from official macOS DMG.
+            Built from [Solar2D ${{ env.TAG }}](https://github.com/coronalabs/corona/releases/tag/${{ env.BUILD }}) open source with [Linux Android patches](https://github.com/${{ github.repository }}/tree/main/patches).
 
-            ## Download & usage
+            ## Quick start
+
             ```bash
-            curl -fsSL https://github.com/Cubeage/solar2d-linux/releases/download/${{ env.YEAR }}.${{ env.BUILD }}/solar2dbuilder-linux-${{ env.BUILD }}.tar.gz \
+            # Download
+            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ env.TAG }}/solar2dbuilder-linux-${{ env.BUILD }}.tar.gz \
               | tar -xz
+
+            # Run (wrapper handles LD_LIBRARY_PATH + xvfb)
             cd solar2d-linux-${{ env.BUILD }}
-            ./Solar2DBuilder build --lua recipe-android.lua
+            ./Solar2DBuilder.sh build --lua path/to/recipe-android.lua
             ```
-          files: ${{ env.PKG_PATH }}
+
+            ## GitHub Actions (add to your workflow)
+
+            ```yaml
+            - name: Build APK
+              run: |
+                curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ env.TAG }}/solar2dbuilder-linux-${{ env.BUILD }}.tar.gz \
+                  | tar -xz
+                cd solar2d-linux-${{ env.BUILD }}
+                ./Solar2DBuilder.sh build --lua client/ci/recipe-android.lua
+            ```
+
+            ## Patches applied
+            See [`patches/`](https://github.com/${{ github.repository }}/tree/main/patches) for the 5 fixes that enable Linux Android builds.
+          files: ${{ env.TARBALL }}

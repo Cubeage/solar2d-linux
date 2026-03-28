@@ -1,0 +1,13 @@
+diff --git a/tools/CoronaBuilder/Rtt_AppPackagerAndroidFactory.cpp b/tools/CoronaBuilder/Rtt_AppPackagerAndroidFactory.cpp
+index 33bf5e0..3317497 100644
+--- a/tools/CoronaBuilder/Rtt_AppPackagerAndroidFactory.cpp
++++ b/tools/CoronaBuilder/Rtt_AppPackagerAndroidFactory.cpp
+@@ -140,6 +140,8 @@ AppPackagerFactory::CreatePackagerParamsAndroid(
+ 				scriptPathStr.Append("/AndroidValidation.lu");
+ #elif defined(Rtt_WIN_ENV)
+ 				scriptPathStr.Append("/AndroidValidation.lua");
++#elif defined(Rtt_LINUX_ENV)
++					scriptPathStr.Append("/AndroidValidation.lua");
+ #endif
+ 				lua_State* L1 = Rtt_AndroidSupportTools_NewLuaState( scriptPathStr.GetString() );
+ 				if (L1 == NULL)
