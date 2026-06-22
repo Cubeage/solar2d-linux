@@ -1,0 +1,144 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "repo": "Cubeage/solar2d-linux",
+    "name": "Cubeage Solar2D Linux",
+    "lifecycle": "production",
+    "layer": "tooling",
+    "summary": "Linux Solar2DBuilder artifact producer for Android APK builds on CI, owning the Solar2D patch set, build script, release workflow, and published tarballs.",
+    "goals": [
+      "Produce Linux Solar2DBuilder packages for Android build pipelines.",
+      "Track upstream Solar2D releases and apply the patch set needed for Linux Android builds.",
+      "Publish reproducible release artifacts with smoke evidence and release readback."
+    ],
+    "nonGoals": [
+      "Do not own the upstream Solar2D runtime, game source code, or Android app release behavior.",
+      "Do not own consumer CI workflows beyond the published Solar2DBuilder package contract.",
+      "Do not own central CI runner, enterprise release bot, or platform preview behavior."
+    ]
+  },
+  "boundaries": {
+    "owns": [
+      {
+        "name": "solar2d-linux-patch-set",
+        "description": "Repository patches that adapt upstream Solar2D source for Linux Android APK builds."
+      },
+      {
+        "name": "solar2d-linux-build-tooling",
+        "description": "Build script and workflow that compile, package, and smoke test Linux Solar2DBuilder."
+      },
+      {
+        "name": "solar2d-linux-release-artifacts",
+        "description": "GitHub Release tarballs consumed by downstream Android build pipelines."
+      }
+    ],
+    "doesNotOwn": [
+      "Upstream Solar2D runtime behavior, source releases, or release cadence.",
+      "Game source code, APK signing, app-store submission behavior, or consumer application release policy.",
+      "Central Sylphx preview platform, central CI runner capacity, branch protection policy, or enterprise release bot behavior."
+    ],
+    "publicSurfaces": [
+      {
+        "type": "package-export",
+        "name": "Linux Solar2DBuilder tarball",
+        "location": ".github/workflows/build.yml:solar2dbuilder-linux-<BUILD>.tar.gz"
+      },
+      {
+        "type": "cli",
+        "name": "Solar2DBuilder wrapper",
+        "location": "README.md:Solar2DBuilder.sh"
+      },
+      {
+        "type": "manifest",
+        "name": "Solar2D Linux patch set",
+        "location": "patches/"
+      },
+      {
+        "type": "workflow",
+        "name": "Solar2DBuilder release workflow",
+        "location": ".github/workflows/build.yml"
+      }
+    ],
+    "allowedDependencies": [
+      {
+        "repo": "coronalabs/corona",
+        "surface": "Solar2D source and release assets",
+        "direction": "external"
+      }
+    ],
+    "forbiddenCouplings": [
+      "Do not add game-specific APK build policy or app release behavior to the package producer.",
+      "Do not patch downstream consumer workflows from this repository.",
+      "Do not treat source revert as sufficient recovery after release tarballs have been published.",
+      "Do not encode central release-bot, runner-capacity, secret-management, or branch-protection policy as build-tool behavior."
+    ]
+  },
+  "documentation": {
+    "adr": {
+      "path": "docs/adr/",
+      "status": "planned"
+    },
+    "specs": {
+      "path": "README.md",
+      "status": "present"
+    },
+    "catalog": {
+      "path": ".doctrine/project.json",
+      "status": "present"
+    },
+    "runbooks": {
+      "path": "README.md",
+      "status": "present"
+    },
+    "generatedReferences": {
+      "path": "patches/",
+      "status": "present"
+    }
+  },
+  "delivery": {
+    "ciModel": "legacy-ci",
+    "requiredContexts": [],
+    "deployPath": "The .github/workflows/build.yml workflow checks upstream Solar2D releases, builds Linux Solar2DBuilder, smoke tests it, and publishes GitHub Release tarballs on schedule or workflow_dispatch. No required PR status context is currently configured in branch protection.",
+    "productionProof": "Release changes require upstream Solar2D version evidence, patch application proof, package smoke output, GitHub Release asset readback, and downstream compatibility notes. Manifest-only changes are proven by the doctrine project-control audit.",
+    "recoveryClass": "forward-fix-only",
+    "packageRelease": {
+      "publishesPackages": true,
+      "ecosystems": [
+        "github-release",
+        "solar2d-builder"
+      ],
+      "releaseIntent": "Current state is schedule or workflow_dispatch release intent from .github/workflows/build.yml; dedicated release-intent PR is not yet adopted.",
+      "versionPr": "Not currently implemented; future path should use a bot-owned version or release PR before publishing release artifacts.",
+      "publisher": ".github/workflows/build.yml currently publishes GitHub Releases with repository workflow permissions; future path should use a dedicated least-privilege release GitHub App or bot.",
+      "requiredContexts": [
+        "check",
+        "build",
+        "smoke-test"
+      ],
+      "publishProof": "GitHub Release readback for solar2dbuilder-linux-<BUILD>.tar.gz plus smoke output from the workflow."
+    }
+  },
+  "adoption": {
+    "status": "baseline",
+    "gaps": [
+      {
+        "id": "no-required-pr-contexts",
+        "description": "Branch protection has no required PR status contexts for build-tool or release changes.",
+        "owner": "Cubeage/solar2d-linux",
+        "target": "Future CI adoption issue"
+      },
+      {
+        "id": "release-bot-not-adopted",
+        "description": "Release artifacts are currently published by schedule or workflow_dispatch without a dedicated release GitHub App or bot-owned version PR.",
+        "owner": "Cubeage/solar2d-linux",
+        "target": "ADR-59 release control-plane adoption"
+      },
+      {
+        "id": "central-admission-not-adopted",
+        "description": "Repository has not adopted central ADR-29 stable admission fan-in contexts.",
+        "owner": "SylphxAI/doctrine#61",
+        "target": "Central CI runner and admission control plane"
+      }
+    ]
+  }
+}
