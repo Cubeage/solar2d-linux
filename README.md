@@ -1,5 +1,10 @@
 # solar2d-linux
 
+<p align="center">
+  <img src="docs/banner.png" alt="solar2d-linux banner" width="100%" />
+</p>
+
+
 Linux builds of **Solar2DBuilder** for CI/CD Android APK builds.
 
 Built from [Solar2D](https://github.com/coronalabs/corona) open source. Automatically updated when Solar2D releases a new version.
