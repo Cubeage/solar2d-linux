@@ -1,9 +1,8 @@
 # solar2d-linux
 
 <p align="center">
-  <img src="docs/banner.png" alt="solar2d-linux banner" width="100%" />
+  <img src="https://mark.sylphx.com/api/v1/banner?type=constellation&theme=cubeage&text=solar2d+linux&desc=Linux+build+of+Solar2DBuilder+for+Android+APK+builds+in+CI&height=200&animation=rise&credit=0" alt="solar2d-linux — Sylphx Mark banner" width="100%" />
 </p>
-
 
 Linux builds of **Solar2DBuilder** for CI/CD Android APK builds.
 
