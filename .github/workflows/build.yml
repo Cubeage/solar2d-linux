@@ -24,7 +24,7 @@ jobs:
   # ── Check if a new Solar2D release is available ─────────────────────
   check:
     name: Check for new Solar2D release
-    runs-on: ubuntu-latest
+    runs-on: sylphx-linux-standard
     outputs:
       build:       ${{ steps.detect.outputs.build }}
       year:        ${{ steps.detect.outputs.year }}
@@ -79,7 +79,7 @@ jobs:
     name: Build Solar2DBuilder ${{ needs.check.outputs.tag }}
     needs: check
     if: needs.check.outputs.should_build == 'true'
-    runs-on: ubuntu-22.04    # Pin to 22.04 for glibc 2.35 compatibility
+    runs-on: sylphx-linux-standard    # Pin to 22.04 for glibc 2.35 compatibility
     env:
       BUILD: ${{ needs.check.outputs.build }}
       YEAR:  ${{ needs.check.outputs.year }}
