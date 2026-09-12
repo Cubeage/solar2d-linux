@@ -15,6 +15,14 @@ on:
         description: 'Solar2D year (blank = auto-detect)'
         required: false
         default: ''
+      package_revision:
+        description: 'Packaging revision of the same Solar2D build (e.g. 1 → release tag YEAR.BUILD.1). Blank = first packaging.'
+        required: false
+        default: ''
+      repack_from:
+        description: 'Repack a published package instead of compiling: base release tag (e.g. 2026.3728) or build number. Blank = build from source.'
+        required: false
+        default: ''
       force:
         description: 'Force rebuild even if already released'
         type: boolean
@@ -28,6 +36,7 @@ jobs:
     outputs:
       build:       ${{ steps.detect.outputs.build }}
       year:        ${{ steps.detect.outputs.year }}
+      pkgver:      ${{ steps.detect.outputs.pkgver }}
       tag:         ${{ steps.detect.outputs.tag }}
       should_build: ${{ steps.detect.outputs.should_build }}
     steps:
@@ -53,25 +62,44 @@ jobs:
             YEAR=$(echo "$RELEASE" | jq -r '.name' | grep -oP '^\d{4}' || echo "$(date +%Y)")
           fi
 
-          TAG="${YEAR}.${BUILD}"
+          # Packaging revision: same upstream build, repackaged (e.g. a fixed
+          # Android template). The tarball keeps the upstream build number so
+          # downstream pins only change the release tag they download from.
+          REV="${{ github.event.inputs.package_revision }}"
+          PKGVER="${BUILD}${REV:+.${REV}}"
+          TAG="${YEAR}.${PKGVER}"
           echo "Target: Solar2D ${TAG}"
 
-          # Check if we already have this version
-          OUR_LATEST=$(curl -fsSL "https://api.github.com/repos/${{ github.repository }}/releases/latest" \
-            | jq -r '.tag_name // "none"' 2>/dev/null || echo "none")
-          echo "Our latest: ${OUR_LATEST}"
+          # Has this upstream build been packaged already (first packaging or a
+          # revision of it)?  Comparing only against the *latest* release would
+          # rebuild/overwrite the existing asset every day as soon as a revision
+          # becomes the latest release.
+          EXISTING=$(curl -fsSL "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100" \
+            | jq -r '.[].tag_name' 2>/dev/null \
+            | grep -E "^${YEAR}\.${BUILD}(\.[0-9]+)?$" | sort -V | tail -1 || true)
+          echo "Existing packaging for Solar2D ${YEAR}.${BUILD}: ${EXISTING:-none}"
 
           FORCE="${{ github.event.inputs.force }}"
-          if [ "$OUR_LATEST" = "$TAG" ] && [ "$FORCE" != "true" ]; then
-            echo "Already up to date (${TAG}). Skipping build."
+          SHOULD_BUILD=true
+          if [ "$FORCE" != "true" ]; then
+            if [ -n "$REV" ]; then
+              [ "$EXISTING" = "$TAG" ] && SHOULD_BUILD=false
+            else
+              [ -n "$EXISTING" ] && SHOULD_BUILD=false
+            fi
+          fi
+          if [ "$SHOULD_BUILD" != "true" ]; then
+            echo "Solar2D ${YEAR}.${BUILD} is already packaged as ${EXISTING}; skipping."
+            echo "Use package_revision=<N> to publish another revision, or force=true to rebuild ${TAG}."
             echo "should_build=false" >> "$GITHUB_OUTPUT"
           else
-            echo "New version available: ${TAG}"
+            echo "Building: ${TAG}"
             echo "should_build=true" >> "$GITHUB_OUTPUT"
           fi
 
           echo "build=${BUILD}"  >> "$GITHUB_OUTPUT"
           echo "year=${YEAR}"    >> "$GITHUB_OUTPUT"
+          echo "pkgver=${PKGVER}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}"      >> "$GITHUB_OUTPUT"
 
   # ── Build and publish ────────────────────────────────────────────────
@@ -83,7 +111,9 @@ jobs:
     env:
       BUILD: ${{ needs.check.outputs.build }}
       YEAR:  ${{ needs.check.outputs.year }}
+      PKGVER: ${{ needs.check.outputs.pkgver }}
       TAG:   ${{ needs.check.outputs.tag }}
+      REPACK_FROM: ${{ github.event.inputs.repack_from }}
     steps:
       # ── Install build dependencies ─────────────────────────────────
       - name: Install build dependencies
@@ -96,7 +126,7 @@ jobs:
             libgl1-mesa-dev libglu1-mesa-dev libgl1-mesa-dri libglx-mesa0 \
             libopenal-dev libpng-dev libjpeg-dev libssl-dev \
             libvorbis-dev libogg-dev uuid-dev zlib1g-dev \
-            libsdl2-dev p7zip-full xvfb
+            libsdl2-dev p7zip-full xvfb unzip python3
 
       # ── Checkout this repo (for patches) ───────────────────────────
       - name: Checkout solar2d-linux (patches)
@@ -104,8 +134,13 @@ jobs:
         with:
           path: solar2d-linux
 
+      # ── Template patch unit tests (cheap, fail fast) ───────────────
+      - name: Test Android template patch script
+        run: python3 -m unittest discover -s solar2d-linux/tests -t solar2d-linux -v
+
       # ── Clone Solar2D source at tag ─────────────────────────────────
       - name: Clone coronalabs/corona @ ${{ env.BUILD }}
+        if: env.REPACK_FROM == ''
         run: |
           git clone --recursive --depth 1 --branch "$BUILD" \
             https://github.com/coronalabs/corona.git solar2d-src
@@ -113,6 +148,7 @@ jobs:
 
       # ── Apply patches ───────────────────────────────────────────────
       - name: Apply Linux Android patches
+        if: env.REPACK_FROM == ''
         run: |
           cd solar2d-src
           for PATCH in ../solar2d-linux/patches/*.patch; do
@@ -123,19 +159,25 @@ jobs:
 
       # ── Build Solar2DBuilder ────────────────────────────────────────
       - name: Build Solar2DBuilder
+        if: env.REPACK_FROM == ''
         run: |
-          cd solar2d-src/platform/linux
-          mkdir -p build && cd build
-          cmake ../.. \
+          # Configure from the REPOSITORY ROOT: the root CMakeLists.txt sets
+          # CORONA_ROOT/ALSOFT_NATIVE_TOOLS_PATH and includes
+          # platform/linux/CMakeList.txt.  `cmake ../..` from
+          # platform/linux/build pointed at platform/, which has no
+          # CMakeLists.txt (all scheduled runs failed there).
+          cd solar2d-src
+          BUILD_NUMBER="${BUILD}" YEAR="${YEAR}" cmake -S . -B platform/linux/build \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_NUMBER="${BUILD}" \
             -DYEAR="${YEAR}"
-          ninja Solar2DBuilder
-          echo "Binary: $(du -sh Solar2DBuilder)"
+          ninja -C platform/linux/build Solar2DBuilder
+          echo "Binary: $(du -sh platform/linux/build/Solar2DBuilder)"
 
       # ── Get Corona.aar from CoronaCards-Android release ─────────────
       - name: Download Corona.aar
+        if: env.REPACK_FROM == ''
         run: |
           URL="https://github.com/coronalabs/corona/releases/download/${BUILD}/CoronaCards-Android-${TAG}.zip"
           echo "Downloading: $URL"
@@ -149,6 +191,7 @@ jobs:
 
       # ── Get android-template.zip from macOS DMG ─────────────────────
       - name: Extract android-template.zip from macOS DMG
+        if: env.REPACK_FROM == ''
         run: |
           URL="https://github.com/coronalabs/corona/releases/download/${BUILD}/Solar2D-macOS-${TAG}.dmg"
           echo "Downloading DMG (large): $URL"
@@ -174,12 +217,72 @@ jobs:
           rm -f Solar2D.dmg
           rm -rf dmg-extract
 
+      # ── Repack mode: reuse a published package as the base ──────────
+      # Same binary, same resources; only the Android template is replaced.
+      # Used for packaging revisions of an already released upstream build.
+      - name: Download base package to repack (${{ env.REPACK_FROM }})
+        if: env.REPACK_FROM != ''
+        run: |
+          set -euo pipefail
+          BASE_TAG="${REPACK_FROM}"
+          case "$BASE_TAG" in
+            *.*) ;;
+            *) BASE_TAG="${YEAR}.${BASE_TAG}" ;;
+          esac
+          URL="https://github.com/${{ github.repository }}/releases/download/${BASE_TAG}/solar2dbuilder-linux-${BUILD}.tar.gz"
+          echo "Repacking base release: ${URL}"
+          curl -fsSL "$URL" -o base.tar.gz
+          sha256sum base.tar.gz | tee base.sha256
+          tar -xzf base.tar.gz
+          [ -d "solar2d-linux-${BUILD}" ] || { echo "base package has no solar2d-linux-${BUILD} directory" >&2; exit 1; }
+          mkdir -p android-templates
+          cp "solar2d-linux-${BUILD}/Resources/android-template.zip" android-templates/android-template.zip
+
+      # ── Patch the Android Gradle template ──────────────────────────
+      # Solar2D 2026.3728 hardcodes compileSdk/targetSdk = 35 in its template
+      # and only reads minSdkVersion from build.settings, so projects that
+      # declare android.targetSdkVersion still ship an artifact Play rejects
+      # ("Target SDK of artifact is too low").  Fail closed on anchor drift.
+      - name: Patch Android template (build.settings target SDK)
+        run: |
+          python3 solar2d-linux/scripts/patch-android-template.py android-templates/android-template.zip
+
+      - name: Verify patched template
+        run: |
+          set -euo pipefail
+          T=$(mktemp -d)
+          unzip -q android-templates/android-template.zip 'template/app/build.gradle.kts' -d "$T"
+          F="$T/template/app/build.gradle.kts"
+          grep -qF 'buildSettings.android.targetSdkVersion' "$F"
+          grep -qF 'compileSdk = coronaCompileSdkVersion' "$F"
+          grep -qF 'targetSdk = coronaTargetSdkVersion' "$F"
+          if grep -qE '^[[:space:]]*(compileSdk|targetSdk) = [0-9]+[[:space:]]*$' "$F"; then
+            echo "ERROR: hardcoded SDK level still present in template" >&2
+            exit 1
+          fi
+          echo "Verified: template honours build.settings android.targetSdkVersion"
+
+      # ── Repack: put the patched template back into the base package ─
+      - name: Repack base package with patched template
+        if: env.REPACK_FROM != ''
+        run: |
+          set -euo pipefail
+          PKG="solar2d-linux-${BUILD}"
+          cp android-templates/android-template.zip "${PKG}/Resources/android-template.zip"
+          cp android-templates/android-template.zip "${PKG}/Resources/Native/Corona/android/resource/android-template.zip"
+          tar -czf "solar2dbuilder-linux-${BUILD}.tar.gz" "${PKG}"
+          echo "TARBALL=solar2dbuilder-linux-${BUILD}.tar.gz" >> "$GITHUB_ENV"
+          sha256sum "solar2dbuilder-linux-${BUILD}.tar.gz"
+          echo "Repacked $(du -sh "solar2dbuilder-linux-${BUILD}.tar.gz" | cut -f1) from $(cat base.sha256)"
+
       # ── Assemble package ────────────────────────────────────────────
       - name: Assemble release package
+        if: env.REPACK_FROM == ''
         run: |
           PKG="solar2d-linux-${BUILD}"
           mkdir -p "${PKG}/lib" "${PKG}/Resources/Native/Corona/android/resource" \
-                                "${PKG}/Resources/Native/Corona/android/lib/gradle"
+                                "${PKG}/Resources/Native/Corona/android/lib/gradle" \
+                                "${PKG}/Resources/Native/Corona/shared/resource"
 
           # Binary
           cp solar2d-src/platform/linux/build/Solar2DBuilder "${PKG}/"
@@ -200,8 +303,18 @@ jobs:
             | xargs -I{} cp -n {} "${PKG}/lib/" 2>/dev/null || true
           echo "Bundled $(ls "${PKG}/lib/" | wc -l) shared libs"
 
+          # Resources: processed resource tree CMakeResources.txt builds next to
+          # the binary (ant.jar/ant-launcher.jar/build.xml/debug.keystore/...)
+          cp -r solar2d-src/platform/linux/build/Resources/. "${PKG}/Resources/"
+
           # Resources: Lua scripts + configs from source
           cp -r solar2d-src/platform/resources/. "${PKG}/Resources/"
+
+          # Resources: shared runtime scripts the Android template loads via the
+          # bundled lua binary (Native/Corona/shared/resource, e.g. json.lua)
+          cp solar2d-src/platform/resources/*.lua "${PKG}/Resources/Native/Corona/shared/resource/"
+          cp solar2d-src/platform/android/create_build_properties.lua \
+             "${PKG}/Resources/Native/Corona/shared/resource/"
           cp solar2d-src/tools/CoronaBuilder/CoronaBuilder.lua           "${PKG}/Resources/" 2>/dev/null || true
           cp solar2d-src/tools/CoronaBuilder/BuilderPluginDownloader.lua "${PKG}/Resources/" 2>/dev/null || true
 
@@ -243,7 +356,11 @@ jobs:
           body: |
             Linux build of `Solar2DBuilder` for CI/CD Android APK builds.
 
-            Built from [Solar2D ${{ env.TAG }}](https://github.com/coronalabs/corona/releases/tag/${{ env.BUILD }}) open source with [Linux Android patches](https://github.com/${{ github.repository }}/tree/main/patches).
+            Built from [Solar2D ${{ env.BUILD }}](https://github.com/coronalabs/corona/releases/tag/${{ env.BUILD }}) open source with [Linux Android patches](https://github.com/${{ github.repository }}/tree/main/patches). Package version: `${{ env.PKGVER }}` (the tarball keeps the upstream build number in its name).
+
+            Packaging: ${{ env.REPACK_FROM != '' && format('repacked from `{0}` — same binary, Android template patched', env.REPACK_FROM) || format('built from Solar2D {0} source', env.BUILD) }}
+
+            Android template patch: `template/app/build.gradle.kts` now reads `build.settings` `android.targetSdkVersion` (falling back to the template default) and uses `compileSdk = maxOf(default, targetSdk)`, so an app can declare a target platform newer than the template's hardcoded one (needed for Google Play's API-level floor).
 
             ## Quick start
 
@@ -269,5 +386,5 @@ jobs:
             ```
 
             ## Patches applied
-            See [`patches/`](https://github.com/${{ github.repository }}/tree/main/patches) for the 5 fixes that enable Linux Android builds.
+            See [`patches/`](https://github.com/${{ github.repository }}/tree/main/patches) for the 4 fixes that enable Linux Android builds, plus [`scripts/patch-android-template.py`](https://github.com/${{ github.repository }}/blob/main/scripts/patch-android-template.py) for the Android template target-SDK fix.
           files: ${{ env.TARBALL }}

@@ -1,0 +1,15 @@
+settings =
+{
+	orientation =
+	{
+		default = "landscapeRight",
+		supported = { "landscapeRight" },
+	},
+	android =
+	{
+		minSdkVersion = "24",
+		targetSdkVersion = "__TARGET_SDK__",
+		versionCode = "1",
+		versionName = "1.0.0",
+	},
+}
