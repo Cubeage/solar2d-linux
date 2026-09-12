@@ -52,15 +52,20 @@ done
 
 # ── 4. Build Solar2DBuilder ──────────────────────────────────────────
 echo "==> Building Solar2DBuilder..."
-mkdir -p platform/linux/build
-cd platform/linux/build
-cmake ../.. \
+# Configure from the REPOSITORY ROOT: the root CMakeLists.txt sets
+# CORONA_ROOT/ALSOFT_NATIVE_TOOLS_PATH and includes platform/linux/CMakeList.txt
+# (note the spelling).  Configuring platform/linux directly cannot work — it has
+# no CMakeLists.txt — and configuring platform/ fails with "does not appear to
+# contain CMakeLists.txt" (that is what broke every scheduled run).
+# BUILD_NUMBER/YEAR are passed both as -D cache vars and as environment
+# variables, because the root CMakeLists.txt reads the environment.
+BUILD_NUMBER="${BUILD}" YEAR="${YEAR}" cmake -S . -B platform/linux/build \
   -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_NUMBER="${BUILD}" \
   -DYEAR="${YEAR}"
-ninja Solar2DBuilder
-echo "    Binary size: $(du -sh Solar2DBuilder | cut -f1)"
+ninja -C platform/linux/build Solar2DBuilder
+echo "    Binary size: $(du -sh platform/linux/build/Solar2DBuilder | cut -f1)"
 
 # ── 5. Get Android templates from official release ───────────────────
 echo "==> Downloading Android templates from Solar2D ${YEAR}.${BUILD}..."
@@ -127,10 +132,24 @@ ldd "${PKG_DIR}/Solar2DBuilder" \
   | xargs -I{} cp -n {} "${PKG_DIR}/lib/" 2>/dev/null || true
 echo "    Bundled $(ls "${PKG_DIR}/lib/" | wc -l) libs"
 
-# Resources: Lua scripts from source
+# Resources: processed resource tree that CMakeResources.txt builds next to the
+# binary (ant.jar/ant-launcher.jar/build.xml/debug.keystore/widget themes/...).
 SRC="${WORK_DIR}/src"
+echo "    Copying processed resources from the build tree..."
+cp -r "${SRC}/platform/linux/build/Resources/." "${PKG_DIR}/Resources/"
+
+# Resources: Lua scripts from source
 echo "    Copying Lua resources from source..."
 cp -r "${SRC}/platform/resources/." "${PKG_DIR}/Resources/"
+
+# Resources: shared runtime scripts the Android template loads through the
+# bundled lua binary (Native/Corona/shared/resource, e.g. json.lua).
+mkdir -p "${PKG_DIR}/Resources/Native/Corona/shared/resource"
+cp "${SRC}"/platform/resources/*.lua "${PKG_DIR}/Resources/Native/Corona/shared/resource/"
+cp "${SRC}/platform/android/create_build_properties.lua" \
+   "${PKG_DIR}/Resources/Native/Corona/shared/resource/"
+echo "    Shared runtime scripts: $(ls "${PKG_DIR}/Resources/Native/Corona/shared/resource" | wc -l) files"
+
 # Additional CoronaBuilder Lua scripts
 cp "${SRC}/tools/CoronaBuilder/CoronaBuilder.lua"              "${PKG_DIR}/Resources/" 2>/dev/null || true
 cp "${SRC}/tools/CoronaBuilder/BuilderPluginDownloader.lua"    "${PKG_DIR}/Resources/" 2>/dev/null || true

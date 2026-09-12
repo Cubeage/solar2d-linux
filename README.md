@@ -60,6 +60,23 @@ different release tag without changing their asset path:
 Dispatch a revision with **Actions → Build Solar2DBuilder for Linux → Run
 workflow** (`solar2d_build=3728`, `solar2d_year=2026`, `package_revision=1`).
 
+### Packaging revisions (`repack_from`)
+
+A revision that only changes packaging (like the Android template patch below) can reuse the
+already published binary instead of recompiling: set `repack_from` to the base release tag (for
+example `2026.3728`) and the workflow downloads that package, patches the Android template, verifies
+it, re-tars the package under the same asset name and publishes it under the new tag. The release
+notes record the base release, and the same repack can be reproduced locally:
+
+```bash
+scripts/repack-revision.sh 2026.3728 3728 --out dist
+# → dist/solar2dbuilder-linux-3728.tar.gz (prints base + result sha256)
+```
+
+The daily check treats a build as already packaged when **any** release for `YEAR.BUILD` exists
+(first packaging or revision), so it will not rebuild and overwrite a published asset; publish
+another revision with `package_revision=<N>` or rebuild explicitly with `force=true`.
+
 ## Android target SDK (`build.settings`)
 
 Solar2D ships its Android Gradle template with the platform level hardcoded
@@ -114,15 +131,21 @@ solar2d-linux-<BUILD>/
 
 ## Patches
 
-5 fixes applied to the Solar2D source to enable Linux Android builds:
+4 fixes applied to the Solar2D source to enable Linux Android builds:
 
 | Patch | Fix |
 |-------|-----|
-| `01-add-android-support-tools.patch` | Simplify root CMakeLists.txt (was mis-including wrong platform file) |
 | `02-linux-cmake-flags.patch` | Add `Rtt_AndroidSupportTools.c` to Solar2DBuilder + `CORONABUILDER_ANDROID` flag |
 | `03-android-validation-linux-path.patch` | Add Linux branch to `AndroidValidation.lua` path lookup |
 | `04-get-resource-directory-linux.patch` | Implement `GetResourceDirectory()` for Linux via `/proc/self/exe` |
 | `05-tmp-dir-linux.patch` | Use `$TMPDIR` (not `/TemporaryFiles` which is root-owned on Linux) |
+
+The former `01-add-android-support-tools.patch` was removed on 2026-09-12. It replaced the upstream
+root `CMakeLists.txt` with a three-line file that dropped `CORONA_ROOT` and `ALSOFT_NATIVE_TOOLS_PATH`
+(both required by `platform/linux/CMakeList.txt`), and the workflow configured `cmake ../..` from
+`platform/linux/build` — i.e. `platform/`, which has no `CMakeLists.txt`. Together they made every
+scheduled build fail; builds now configure the repository root, which is what the upstream root file
+expects.
 
 The Android Gradle template is patched at package time (it ships inside the
 official DMG, not in the patch set): see **Android target SDK** above and
@@ -135,3 +158,6 @@ official DMG, not in the patch set): see **Android target SDK** above and
 ```
 
 Requires: `cmake`, `ninja`, `jdk-17`, OpenGL dev libs, `7zip`, `xvfb`.
+The script configures the repository root (`cmake -S . -B platform/linux/build`), applies
+`patches/`, downloads the official DMG for `Corona.aar`/`android-template.zip`, patches the Android
+template, and writes `solar2dbuilder-linux-<BUILD>.tar.gz` in the repository root.

@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import re
 import shutil
 import sys
@@ -106,6 +107,12 @@ def patch_template_text(text: str) -> tuple[str, bool]:
             raise PatchError(
                 f"marker {MARKER!r} present but no {TARGET_SDK_KEY!r} lookup; "
                 "refusing to guess"
+            )
+        if re.search(r"^[ \t]*(compileSdk|targetSdk) = \d+[ \t]*$", text, re.MULTILINE):
+            raise PatchError(
+                "template declares "
+                f"{TARGET_SDK_KEY!r} but still hardcodes a compileSdk/targetSdk level; "
+                "update scripts/patch-android-template.py"
             )
         return text, False
 
@@ -170,6 +177,7 @@ def verify_patched_text(text: str) -> None:
 
 def rewrite_zip(zip_path: Path, new_text: str) -> None:
     """Replace TEMPLATE_ENTRY inside ``zip_path`` atomically, keeping all else."""
+    mode = zip_path.stat().st_mode
     with zipfile.ZipFile(zip_path) as zin:
         infos = zin.infolist()
         try:
@@ -192,6 +200,7 @@ def rewrite_zip(zip_path: Path, new_text: str) -> None:
                 new_info.comment = info.comment
                 zout.writestr(new_info, data[info.filename])
         shutil.move(tmp_name, zip_path)
+        os.chmod(zip_path, mode)
     except BaseException:
         Path(tmp_name).unlink(missing_ok=True)
         raise
@@ -207,8 +216,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {zip_path} is not a file", file=sys.stderr)
         return 2
 
-    with zipfile.ZipFile(zip_path) as zf:
-        original = zf.read(TEMPLATE_ENTRY).decode("utf-8")
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            original = zf.read(TEMPLATE_ENTRY).decode("utf-8")
+    except KeyError:
+        print(f"error: {zip_path} has no {TEMPLATE_ENTRY}", file=sys.stderr)
+        return 1
 
     try:
         patched, changed = patch_template_text(original)

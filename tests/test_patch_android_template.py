@@ -77,6 +77,17 @@ class PatchTextTests(unittest.TestCase):
         with self.assertRaises(pat.PatchError):
             pat.patch_template_text(mutated)
 
+    def test_fails_closed_when_lookup_present_but_level_still_hardcoded(self) -> None:
+        mutated = self.original.replace(
+            'extra["minSdkVersion"]',
+            'val unused = parsedBuildProperties.lookup<Any?>('
+            '"buildSettings.android.targetSdkVersion")\n'
+            'extra["minSdkVersion"]',
+            1,
+        )
+        with self.assertRaises(pat.PatchError):
+            pat.patch_template_text(mutated)
+
 
 class PatchZipTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -117,6 +128,19 @@ class PatchZipTests(unittest.TestCase):
 
     def test_cli_reports_missing_file(self) -> None:
         self.assertEqual(pat.main([str(self.tmp / "nope.zip")]), 2)
+
+    def test_cli_reports_zip_without_template_entry(self) -> None:
+        broken = self.tmp / "no-template.zip"
+        with zipfile.ZipFile(broken, "w") as zf:
+            zf.writestr("something/else.txt", "hi")
+        before = broken.read_bytes()
+        self.assertEqual(pat.main([str(broken)]), 1)
+        self.assertEqual(before, broken.read_bytes())
+
+    def test_cli_preserves_file_mode(self) -> None:
+        self.zip_path.chmod(0o640)
+        self.assertEqual(pat.main([str(self.zip_path)]), 0)
+        self.assertEqual(self.zip_path.stat().st_mode & 0o777, 0o640)
 
     def test_cli_fails_closed_and_leaves_zip_untouched(self) -> None:
         broken = self.tmp / "broken.zip"
