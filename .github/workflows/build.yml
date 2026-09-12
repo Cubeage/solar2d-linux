@@ -15,6 +15,10 @@ on:
         description: 'Solar2D year (blank = auto-detect)'
         required: false
         default: ''
+      package_revision:
+        description: 'Packaging revision of the same Solar2D build (e.g. 1 → release tag YEAR.BUILD.1). Blank = first packaging.'
+        required: false
+        default: ''
       force:
         description: 'Force rebuild even if already released'
         type: boolean
@@ -28,6 +32,7 @@ jobs:
     outputs:
       build:       ${{ steps.detect.outputs.build }}
       year:        ${{ steps.detect.outputs.year }}
+      pkgver:      ${{ steps.detect.outputs.pkgver }}
       tag:         ${{ steps.detect.outputs.tag }}
       should_build: ${{ steps.detect.outputs.should_build }}
     steps:
@@ -53,7 +58,12 @@ jobs:
             YEAR=$(echo "$RELEASE" | jq -r '.name' | grep -oP '^\d{4}' || echo "$(date +%Y)")
           fi
 
-          TAG="${YEAR}.${BUILD}"
+          # Packaging revision: same upstream build, repackaged (e.g. a fixed
+          # Android template). The tarball keeps the upstream build number so
+          # downstream pins only change the release tag they download from.
+          REV="${{ github.event.inputs.package_revision }}"
+          PKGVER="${BUILD}${REV:+.${REV}}"
+          TAG="${YEAR}.${PKGVER}"
           echo "Target: Solar2D ${TAG}"
 
           # Check if we already have this version
@@ -72,6 +82,7 @@ jobs:
 
           echo "build=${BUILD}"  >> "$GITHUB_OUTPUT"
           echo "year=${YEAR}"    >> "$GITHUB_OUTPUT"
+          echo "pkgver=${PKGVER}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}"      >> "$GITHUB_OUTPUT"
 
   # ── Build and publish ────────────────────────────────────────────────
@@ -83,6 +94,7 @@ jobs:
     env:
       BUILD: ${{ needs.check.outputs.build }}
       YEAR:  ${{ needs.check.outputs.year }}
+      PKGVER: ${{ needs.check.outputs.pkgver }}
       TAG:   ${{ needs.check.outputs.tag }}
     steps:
       # ── Install build dependencies ─────────────────────────────────
@@ -96,13 +108,17 @@ jobs:
             libgl1-mesa-dev libglu1-mesa-dev libgl1-mesa-dri libglx-mesa0 \
             libopenal-dev libpng-dev libjpeg-dev libssl-dev \
             libvorbis-dev libogg-dev uuid-dev zlib1g-dev \
-            libsdl2-dev p7zip-full xvfb
+            libsdl2-dev p7zip-full xvfb unzip python3
 
       # ── Checkout this repo (for patches) ───────────────────────────
       - name: Checkout solar2d-linux (patches)
         uses: actions/checkout@v4
         with:
           path: solar2d-linux
+
+      # ── Template patch unit tests (cheap, fail fast) ───────────────
+      - name: Test Android template patch script
+        run: python3 -m unittest discover -s solar2d-linux/tests -t solar2d-linux -v
 
       # ── Clone Solar2D source at tag ─────────────────────────────────
       - name: Clone coronalabs/corona @ ${{ env.BUILD }}
@@ -174,6 +190,30 @@ jobs:
           rm -f Solar2D.dmg
           rm -rf dmg-extract
 
+      # ── Patch the Android Gradle template ──────────────────────────
+      # Solar2D 2026.3728 hardcodes compileSdk/targetSdk = 35 in its template
+      # and only reads minSdkVersion from build.settings, so projects that
+      # declare android.targetSdkVersion still ship an artifact Play rejects
+      # ("Target SDK of artifact is too low").  Fail closed on anchor drift.
+      - name: Patch Android template (build.settings target SDK)
+        run: |
+          python3 solar2d-linux/scripts/patch-android-template.py android-templates/android-template.zip
+
+      - name: Verify patched template
+        run: |
+          set -euo pipefail
+          T=$(mktemp -d)
+          unzip -q android-templates/android-template.zip 'template/app/build.gradle.kts' -d "$T"
+          F="$T/template/app/build.gradle.kts"
+          grep -qF 'buildSettings.android.targetSdkVersion' "$F"
+          grep -qF 'compileSdk = coronaCompileSdkVersion' "$F"
+          grep -qF 'targetSdk = coronaTargetSdkVersion' "$F"
+          if grep -qE '^[[:space:]]*(compileSdk|targetSdk) = [0-9]+[[:space:]]*$' "$F"; then
+            echo "ERROR: hardcoded SDK level still present in template" >&2
+            exit 1
+          fi
+          echo "Verified: template honours build.settings android.targetSdkVersion"
+
       # ── Assemble package ────────────────────────────────────────────
       - name: Assemble release package
         run: |
@@ -243,7 +283,9 @@ jobs:
           body: |
             Linux build of `Solar2DBuilder` for CI/CD Android APK builds.
 
-            Built from [Solar2D ${{ env.TAG }}](https://github.com/coronalabs/corona/releases/tag/${{ env.BUILD }}) open source with [Linux Android patches](https://github.com/${{ github.repository }}/tree/main/patches).
+            Built from [Solar2D ${{ env.BUILD }}](https://github.com/coronalabs/corona/releases/tag/${{ env.BUILD }}) open source with [Linux Android patches](https://github.com/${{ github.repository }}/tree/main/patches). Package version: `${{ env.PKGVER }}` (the tarball keeps the upstream build number in its name).
+
+            Android template patch: `template/app/build.gradle.kts` now reads `build.settings` `android.targetSdkVersion` (falling back to the template default) and uses `compileSdk = maxOf(default, targetSdk)`, so an app can declare a target platform newer than the template's hardcoded one (needed for Google Play's API-level floor).
 
             ## Quick start
 
@@ -269,5 +311,5 @@ jobs:
             ```
 
             ## Patches applied
-            See [`patches/`](https://github.com/${{ github.repository }}/tree/main/patches) for the 5 fixes that enable Linux Android builds.
+            See [`patches/`](https://github.com/${{ github.repository }}/tree/main/patches) for the 5 fixes that enable Linux Android builds, plus [`scripts/patch-android-template.py`](https://github.com/${{ github.repository }}/blob/main/scripts/patch-android-template.py) for the Android template target-SDK fix.
           files: ${{ env.TARBALL }}

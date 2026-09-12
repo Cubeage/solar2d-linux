@@ -35,7 +35,7 @@ sudo apt-get install -y \
   libopenal-dev libpng-dev libjpeg-dev libssl-dev \
   libvorbis-dev libogg-dev uuid-dev zlib1g-dev \
   libsdl2-dev p7zip-full xvfb \
-  patchelf 2>/dev/null || true
+  patchelf unzip python3 2>/dev/null || true
 
 # ── 2. Clone Solar2D source at tag ───────────────────────────────────
 echo "==> Cloning coronalabs/corona @ tag ${BUILD}..."
@@ -93,6 +93,10 @@ if [ -z "$TEMPLATE" ]; then
 fi
 cp "$TEMPLATE" "${WORK_DIR}/templates/android-template.zip"
 echo "    android-template.zip: $(du -sh "${WORK_DIR}/templates/android-template.zip" | cut -f1)"
+# Make the template honour build.settings android.targetSdkVersion (Google
+# Play rejects updates targeting an API level below its floor; the released
+# template hardcodes compileSdk/targetSdk = 35).  Fails closed on drift.
+python3 "${REPO_ROOT}/scripts/patch-android-template.py" "${WORK_DIR}/templates/android-template.zip"
 # Free up disk
 rm -f "${WORK_DIR}/Solar2D.dmg"
 rm -rf "${WORK_DIR}/dmg"

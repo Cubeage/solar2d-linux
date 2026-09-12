@@ -1,0 +1,76 @@
+name: Smoke — Android target SDK honoured
+
+# Proves a PUBLISHED package honours build.settings android.targetSdkVersion:
+# downloads the release tarball, builds tests/fixture-project (which declares
+# the requested target SDK) with it, and reads the produced APK back with aapt2.
+# This is the end-to-end regression check for scripts/patch-android-template.py.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag to test (e.g. 2026.3728.1)'
+        required: true
+        default: '2026.3728.1'
+      solar2d_build:
+        description: 'Upstream Solar2D build number (tarball name / inner dir)'
+        required: true
+        default: '3728'
+      target_sdk:
+        description: 'targetSdkVersion the fixture project declares'
+        required: true
+        default: '36'
+
+jobs:
+  smoke:
+    name: Build fixture project and assert APK target SDK
+    runs-on: sylphx-linux-standard
+    env:
+      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
+      ANDROID_HOME: ${{ github.workspace }}/android-sdk
+      RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+      SOLAR2D_BUILD: ${{ github.event.inputs.solar2d_build }}
+      TARGET_SDK: ${{ github.event.inputs.target_sdk }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            openjdk-17-jdk-headless xvfb xauth unzip python3 curl
+          java -version
+
+      - name: Install Android SDK (platforms;android-${{ env.TARGET_SDK }}, build-tools;36.0.0)
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-14742923_latest.zip" \
+              -o /tmp/cmdline-tools.zip
+            mkdir -p /tmp/cmdline-tools "$ANDROID_SDK_ROOT/cmdline-tools"
+            unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdline-tools
+            mv /tmp/cmdline-tools/cmdline-tools "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          fi
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null || true
+          "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" \
+            "platform-tools" "platforms;android-${TARGET_SDK}" "build-tools;36.0.0"
+          ls "$ANDROID_SDK_ROOT/platforms"
+
+      - name: Download published package
+        run: |
+          set -euo pipefail
+          URL="https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/solar2dbuilder-linux-${SOLAR2D_BUILD}.tar.gz"
+          echo "Downloading: $URL"
+          curl -fsSL "$URL" -o package.tar.gz
+          sha256sum package.tar.gz
+          tar -xzf package.tar.gz
+
+      - name: Unit tests (template patch)
+        run: python3 -m unittest discover -s tests -t . -v
+
+      - name: Build fixture project and assert artifact target SDK
+        run: |
+          scripts/smoke-target-sdk-build.sh \
+            "$PWD/solar2d-linux-${SOLAR2D_BUILD}" \
+            --target "${TARGET_SDK}" \
+            --work "${RUNNER_TEMP:-/tmp}/smoke"
