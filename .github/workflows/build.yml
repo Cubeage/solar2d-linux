@@ -188,7 +188,10 @@ jobs:
           mkdir -p android-templates
           cd android-templates
           unzip -q ../CoronaCards-Android.zip
-          unzip -q CoronaCardsAndroidAAR.zip
+          # Older releases nest the AAR in CoronaCardsAndroidAAR.zip; from
+          # 2026.3731 the release zip holds CoronaCards.aar directly.
+          if [ -f CoronaCardsAndroidAAR.zip ]; then unzip -q CoronaCardsAndroidAAR.zip; fi
+          test -f CoronaCards.aar || { echo "::error::CoronaCards.aar not found in release zip"; ls -la; exit 1; }
           mv CoronaCards.aar Corona.aar
           echo "Corona.aar: $(du -sh Corona.aar)"
 
