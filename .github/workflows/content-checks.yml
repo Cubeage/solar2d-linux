@@ -1,0 +1,34 @@
+name: content-checks
+
+# Company content rules on added lines only (SylphxAI/.github shared actions).
+# - plain-language (owner standards/docs.md): advisory permanently; it warns and
+#   never blocks, because a term list is never complete.
+# - zh-hant (owner standards/experience.md): advisory until 2026-10-02. On that
+#   date drop its continue-on-error and make the "zh-hant" check required.
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  plain-language:
+    runs-on: sylphx-linux-standard
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: SylphxAI/.github/.github/actions/plain-language@64598b859231c51f32d0be39630f36893d84f204
+        continue-on-error: true
+
+  zh-hant:
+    runs-on: sylphx-linux-standard
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: SylphxAI/.github/.github/actions/zh-hant@61144776537ea1d3d771470bbf04924d2df36209
+        continue-on-error: true
