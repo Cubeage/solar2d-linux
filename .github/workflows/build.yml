@@ -45,6 +45,10 @@ jobs:
     steps:
       - name: Detect version and compare
         id: detect
+        env:
+          # Authenticated API calls: the shared runner IPs hit the anonymous
+          # rate limit (403) on the scheduled run of 2026-09-26.
+          GH_API_AUTH: "Authorization: Bearer ${{ github.token }}"
         run: |
           # Resolve target Solar2D version
           INPUT_BUILD="${{ github.event.inputs.solar2d_build }}"
@@ -55,12 +59,12 @@ jobs:
               YEAR="$INPUT_YEAR"
             else
               # Auto-detect year from the release name
-              YEAR=$(curl -fsSL "https://api.github.com/repos/coronalabs/corona/releases/tags/${BUILD}" \
+              YEAR=$(curl -fsSL -H "$GH_API_AUTH" "https://api.github.com/repos/coronalabs/corona/releases/tags/${BUILD}" \
                 | jq -r '.name' | grep -oP '^\d{4}' || echo "$(date +%Y)")
             fi
           else
             # Get latest Solar2D release
-            RELEASE=$(curl -fsSL "https://api.github.com/repos/coronalabs/corona/releases/latest")
+            RELEASE=$(curl -fsSL -H "$GH_API_AUTH" "https://api.github.com/repos/coronalabs/corona/releases/latest")
             BUILD=$(echo "$RELEASE" | jq -r '.tag_name')
             YEAR=$(echo "$RELEASE" | jq -r '.name' | grep -oP '^\d{4}' || echo "$(date +%Y)")
           fi
@@ -77,7 +81,7 @@ jobs:
           # revision of it)?  Comparing only against the *latest* release would
           # rebuild/overwrite the existing asset every day as soon as a revision
           # becomes the latest release.
-          EXISTING=$(curl -fsSL "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100" \
+          EXISTING=$(curl -fsSL -H "$GH_API_AUTH" "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100" \
             | jq -r '.[].tag_name' 2>/dev/null \
             | grep -E "^${YEAR}\.${BUILD}(\.[0-9]+)?$" | sort -V | tail -1 || true)
           echo "Existing packaging for Solar2D ${YEAR}.${BUILD}: ${EXISTING:-none}"
