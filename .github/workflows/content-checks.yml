@@ -32,3 +32,10 @@ jobs:
           fetch-depth: 0
       - uses: SylphxAI/.github/.github/actions/zh-hant@e48f73367c3f873a1a6930c844d053ac22b32262
         continue-on-error: true
+
+  self-hosted-runners:
+    runs-on: sylphx-linux-standard
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Cubeage/.github/.github/actions/self-hosted-runners@854d150d886e0a4d15846e87e57ca67c7b8c290e
