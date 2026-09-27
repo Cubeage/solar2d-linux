@@ -23,7 +23,7 @@ on:
 jobs:
   smoke:
     name: Build fixture project and assert APK target SDK
-    runs-on: sylphx-linux-standard
+    runs-on: ubuntu-latest
     env:
       ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
       ANDROID_HOME: ${{ github.workspace }}/android-sdk
