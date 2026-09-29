@@ -20,6 +20,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          filter: blob:none
       - uses: SylphxAI/.github/.github/actions/plain-language@f9176dad2e49c6b99d75f1506fafac84632fe870
         continue-on-error: true
 
@@ -30,6 +31,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          filter: blob:none
       - uses: SylphxAI/.github/.github/actions/zh-hant@e48f73367c3f873a1a6930c844d053ac22b32262
         continue-on-error: true
 
